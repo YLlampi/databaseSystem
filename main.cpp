@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+const int PAGE_SIZE = 4096; // Tamaño de página en bytes
+
 struct Field {
     std::string name;
     std::string type;
@@ -16,10 +18,15 @@ struct Record {
     std::vector<std::string> values;
 };
 
+struct Page {
+    int pageNumber;
+    std::vector<Record> records;
+};
+
 struct Table {
     std::string name;
     std::vector<Field> fields;
-    std::vector<Record> records;
+    std::vector<Page> pages;
     // Otros atributos de la tabla si es necesario
     
     // Constructor
@@ -34,6 +41,12 @@ void writeRecord(std::ofstream& file, const Record& record) {
     }
 }
 
+void writePage(std::ofstream& file, const Page& page) {
+    for (const Record& record : page.records) {
+        writeRecord(file, record);
+    }
+}
+
 void writeTableToFile(const std::string& filename, const Table& table) {
     std::ofstream databaseFile(filename, std::ios::binary | std::ios::app);
     
@@ -42,13 +55,9 @@ void writeTableToFile(const std::string& filename, const Table& table) {
         return;
     }
     
-    // Escribir la cantidad de registros en la tabla
-    int numRecords = table.records.size();
-    databaseFile.write(reinterpret_cast<const char*>(&numRecords), sizeof(int));
-    
-    // Escribir los registros en la tabla
-    for (const Record& record : table.records) {
-        writeRecord(databaseFile, record);
+    // Escribir las páginas en el archivo
+    for (const Page& page : table.pages) {
+        writePage(databaseFile, page);
     }
     
     databaseFile.close();
@@ -68,6 +77,17 @@ void readRecord(std::ifstream& file, Record& record) {
     }
 }
 
+void readPage(std::ifstream& file, Page& page) {
+    Record record;
+    while (!file.eof()) {
+        readRecord(file, record);
+        if (!record.values.empty()) {
+            page.records.push_back(record);
+            record.values.clear();
+        }
+    }
+}
+
 void readTableFromFile(const std::string& filename, Table& table) {
     std::ifstream databaseFile(filename, std::ios::binary);
     
@@ -76,54 +96,76 @@ void readTableFromFile(const std::string& filename, Table& table) {
         return;
     }
     
-    // Leer la cantidad de registros en la tabla
-    int numRecords;
-    databaseFile.read(reinterpret_cast<char*>(&numRecords), sizeof(int));
+    // Leer las páginas del archivo
+    Page page;
+    page.pageNumber = 1; // Supongamos que la numeración de páginas comienza en 1
     
-    // Leer los registros en la tabla
-    for (int i = 0; i < numRecords; i++) {
-        Record record;
-        readRecord(databaseFile, record);
-        table.records.push_back(record);
+    while (!databaseFile.eof()) {
+        page.records.clear();
+        readPage(databaseFile, page);
+        if (!page.records.empty()) {
+            table.pages.push_back(page);
+            page.pageNumber++;
+        }
     }
     
     databaseFile.close();
 }
 
-int main() {
-    std::vector<Table> tables;
-    
-    // Definir las tablas y campos de la base de datos
-    Table customers("Customers");
-    customers.fields.push_back(Field("ID", "INT"));
-    customers.fields.push_back(Field("Name", "VARCHAR(50)"));
-    customers.fields.push_back(Field("Email", "VARCHAR(100)"));
-    
-    Table orders("Orders");
-    orders.fields.push_back(Field("ID", "INT"));
-    orders.fields.push_back(Field("CustomerID", "INT"));
-    orders.fields.push_back(Field("Product", "VARCHAR(50)"));
-    orders.fields.push_back(Field("Quantity", "INT"));
-    
-    // Agregar las tablas a la base de datos
-    tables.push_back(customers);
-    tables.push_back(orders);
-    
-    // Ejemplo de escritura en el archivo
-    for (const Table& table : tables) {
-        writeTableToFile("database.bin", table);
+void addRecordToTable(Table& table, const Record& record) {
+    // Encontrar la página con suficiente espacio para el nuevo registro
+    for (Page& page : table.pages) {
+        if (page.records.size() < PAGE_SIZE) {
+            page.records.push_back(record);
+            return;
+        }
     }
     
-    // Ejemplo de lectura desde el archivo
-    Table customersRead("Customers");
-    readTableFromFile("database.bin", customersRead);
+    // Si no hay ninguna página disponible, crear una nueva página
+    Page newPage;
+    newPage.pageNumber = table.pages.size() + 1; // Asignar el número de página siguiente
+    newPage.records.push_back(record);
+    table.pages.push_back(newPage);
+}
+
+int main() {
+    Table myTable("MyTable");
     
-    // Imprimir los registros de la tabla Customers
-    for (const Record& record : customersRead.records) {
-        for (const std::string& value : record.values) {
-            std::cout << value << " ";
+    // Agregar campos a la tabla
+    myTable.fields.push_back(Field("ID", "INT"));
+    myTable.fields.push_back(Field("Name", "VARCHAR(50)"));
+    myTable.fields.push_back(Field("Email", "VARCHAR(100)"));
+    
+    // Agregar registros a la tabla
+    Record record1;
+    record1.values.push_back("1");
+    record1.values.push_back("Juan Camaro");
+    record1.values.push_back("camaro@email.com");
+    
+    addRecordToTable(myTable, record1);
+    
+    Record record2;
+    record2.values.push_back("2");
+    record2.values.push_back("Albert Camus");
+    record2.values.push_back("camus@email.com");
+    
+    addRecordToTable(myTable, record2);
+    
+    // Escribir la tabla en el archivo
+    writeTableToFile("database.bin", myTable);
+    
+    // Leer la tabla desde el archivo
+    Table myTableRead("MyTable");
+    readTableFromFile("database.bin", myTableRead);
+    
+    // Imprimir los registros de la tabla
+    for (const Page& page : myTableRead.pages) {
+        for (const Record& record : page.records) {
+            for (const std::string& value : record.values) {
+                std::cout << value << " ";
+            }
+            std::cout << std::endl;
         }
-        std::cout << std::endl;
     }
     
     return 0;
