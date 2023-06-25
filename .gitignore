@@ -1,0 +1,8 @@
+# .gitignore
+
+/venv
+/.vscode
+/.cph
+*.out
+*.in
+*eject
