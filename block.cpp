@@ -1,226 +1,237 @@
 #include <iostream>
 #include <fstream>
-#include <string>
 #include <vector>
 #include <algorithm>
 
-const int PAGE_SIZE = 4096; // Tamaño de página en bytes
-const int BUFFER_POOL_SIZE = 10; // Tamaño del buffer pool
-
-// Estructura para representar un registro
 struct Record {
     int id;
     std::string name;
     int age;
 };
 
-// Estructura para representar una página
-struct Page {
-    int pageNumber;
-    std::vector<Record> records;
-    bool dirty;
-};
-
-class BufferPool {
-private:
-    std::vector<Page> buffer; // Buffer pool
-
+class PaginationManager {
 public:
-    BufferPool() {
-        buffer.resize(BUFFER_POOL_SIZE);
-    }
-
     std::vector<Record> readPage(int pageNumber) {
-        // Buscar la página en el buffer pool
-        auto it = std::find_if(buffer.begin(), buffer.end(), [pageNumber](const Page& page) {
-            return page.pageNumber == pageNumber;
-        });
+        std::ifstream file("database.bin", std::ios::binary | std::ios::in);
+        std::vector<Record> pageRecords;
 
-        if (it != buffer.end()) {
-            // Si la página está en el buffer pool, devolver los registros
-            return it->records;
-        } else {
-            // Si la página no está en el buffer pool, leerla desde el archivo binario
-            std::vector<Record> records = readPageFromStorage(pageNumber);
-
-            // Agregar la página al buffer pool
-            addPageToBufferPool(pageNumber, records);
-
-            // Devolver los registros
-            return records;
+        if (file) {
+            file.seekg(pageNumber * pageSize * sizeof(Record), std::ios::beg);
+            for (int i = 0; i < pageSize; ++i) {
+                Record record;
+                file.read(reinterpret_cast<char*>(&record), sizeof(Record));
+                pageRecords.push_back(record);
+            }
+            file.close();
         }
+
+        return pageRecords;
     }
 
     void writePage(int pageNumber, const std::vector<Record>& records) {
-        // Buscar la página en el buffer pool
-        auto it = std::find_if(buffer.begin(), buffer.end(), [pageNumber](const Page& page) {
-            return page.pageNumber == pageNumber;
-        });
-
-        if (it != buffer.end()) {
-            // Si la página está en el buffer pool, actualizar los registros
-            it->records = records;
-            it->dirty = true;
-        } else {
-            // Si la página no está en el buffer pool, agregarla
-            addPageToBufferPool(pageNumber, records);
-        }
-    }
-
-    void flushBufferPool() {
-        // Escribir todas las páginas sucias del buffer pool al archivo binario
-        for (auto& page : buffer) {
-            if (page.dirty) {
-                writePageToStorage(page.pageNumber, page.records);
-                page.dirty = false;
-            }
-        }
-    }
-
-private:
-    void addPageToBufferPool(int pageNumber, const std::vector<Record>& records) {
-        // Buscar una página vacía en el buffer pool
-        auto it = std::find_if(buffer.begin(), buffer.end(), [](const Page& page) {
-            return page.pageNumber == -1;
-        });
-
-        if (it != buffer.end()) {
-            // Si se encontró una página vacía, asignarle el número de página y los registros
-            it->pageNumber = pageNumber;
-            it->records = records;
-            it->dirty = false;
-        } else {
-            // Si no se encontró una página vacía, aplicar un algoritmo de reemplazo (p. ej., LRU, FIFO)
-            // Para simplificar el ejemplo, asumimos que el buffer pool tiene suficiente espacio para todas las páginas
-            // Puedes implementar un algoritmo de reemplazo específico según tus necesidades
-        }
-    }
-
-    std::vector<Record> readPageFromStorage(int pageNumber) {
-        // Calcular la posición de inicio de la página en el archivo binario
-        std::streampos startPos = static_cast<std::streampos>(pageNumber) * PAGE_SIZE;
-
-        // Leer la página desde el archivo y devolver los registros
-        std::ifstream file("database.bin", std::ios::binary | std::ios::in);
-        file.seekg(startPos);
-
-        std::vector<Record> records;
-        Record record;
-        while (file.read(reinterpret_cast<char*>(&record), sizeof(Record))) {
-            records.push_back(record);
-        }
-        file.close();
-
-        return records;
-    }
-
-    void writePageToStorage(int pageNumber, const std::vector<Record>& records) {
-        // Calcular la posición de inicio de la página en el archivo binario
-        std::streampos startPos = static_cast<std::streampos>(pageNumber) * PAGE_SIZE;
-
-        // Escribir la página en el archivo
-        std::ofstream file("database.bin", std::ios::binary | std::ios::in | std::ios::out);
-        file.seekp(startPos);
-
+        std::fstream file("database.bin", std::ios::binary | std::ios::out | std::ios::in);
+        file.seekp(pageNumber * pageSize * sizeof(Record), std::ios::beg);
         for (const auto& record : records) {
             file.write(reinterpret_cast<const char*>(&record), sizeof(Record));
         }
         file.close();
     }
+
+private:
+    const int pageSize = 5;
 };
 
-class Database {
+class BufferPool {
 public:
-    BufferPool bufferPool;
-
-public:
-    void createRecord(const Record& record) {
-        // Leer la primera página desde el buffer pool
-        std::vector<Record> records = bufferPool.readPage(0);
-
-        // Agregar el nuevo registro a la página
-        records.push_back(record);
-
-        // Escribir la página actualizada en el buffer pool
-        bufferPool.writePage(0, records);
+    BufferPool() {
+        buffer.resize(bufferSize);
     }
 
-    Record readRecord(int id) {
-        // Leer la primera página desde el buffer pool
-        std::vector<Record> records = bufferPool.readPage(0);
-
-        // Buscar el registro con el id dado
-        auto it = std::find_if(records.begin(), records.end(), [id](const Record& record) {
-            return record.id == id;
+    std::vector<Record> readPage(int pageNumber) {
+        auto it = std::find_if(buffer.begin(), buffer.end(), [pageNumber](const Page& page) {
+            return page.pageNumber == pageNumber;
         });
 
-        if (it != records.end()) {
-            // Si se encontró el registro, devolverlo
-            return *it;
+        if (it != buffer.end()) {
+            it->lastUsed = 0;
+            return it->records;
         } else {
-            // Si no se encontró el registro, devolver un registro vacío
-            return {};
+            PaginationManager paginationManager;
+            std::vector<Record> records = paginationManager.readPage(pageNumber);
+            addPageToBufferPool(pageNumber, records);
+            return records;
         }
     }
 
-    void updateRecord(const Record& record) {
-        // Leer la primera página desde el buffer pool
+    void writePage(int pageNumber, const std::vector<Record>& records) {
+        auto it = std::find_if(buffer.begin(), buffer.end(), [pageNumber](const Page& page) {
+            return page.pageNumber == pageNumber;
+        });
+
+        if (it != buffer.end()) {
+            it->records = records;
+            it->dirty = true;
+        } else {
+            addPageToBufferPool(pageNumber, records);
+            markPageAsDirty(pageNumber);
+        }
+    }
+
+private:
+    struct Page {
+        int pageNumber;
+        std::vector<Record> records;
+        bool dirty;
+        int lastUsed;
+    };
+
+    const int bufferSize = 3;
+    std::vector<Page> buffer;
+
+    void addPageToBufferPool(int pageNumber, const std::vector<Record>& records) {
+        auto it = std::find_if(buffer.begin(), buffer.end(), [](const Page& page) {
+            return page.pageNumber == -1;
+        });
+
+        if (it != buffer.end()) {
+            it->pageNumber = pageNumber;
+            it->records = records;
+            it->dirty = false;
+        } else {
+            replacePageLRU(pageNumber, records);
+        }
+    }
+
+    void replacePageLRU(int pageNumber, const std::vector<Record>& records) {
+        auto lruPageIt = std::min_element(buffer.begin(), buffer.end(), [](const Page& page1, const Page& page2) {
+            return page1.lastUsed < page2.lastUsed;
+        });
+
+        if (lruPageIt != buffer.end()) {
+            if (lruPageIt->dirty) {
+                PaginationManager paginationManager;
+                paginationManager.writePage(lruPageIt->pageNumber, lruPageIt->records);
+            }
+
+            lruPageIt->pageNumber = pageNumber;
+            lruPageIt->records = records;
+            lruPageIt->dirty = false;
+            lruPageIt->lastUsed = 0;
+        }
+    }
+
+    void markPageAsDirty(int pageNumber) {
+        auto it = std::find_if(buffer.begin(), buffer.end(), [pageNumber](const Page& page) {
+            return page.pageNumber == pageNumber;
+        });
+
+        if (it != buffer.end()) {
+            it->dirty = true;
+        }
+    }
+};
+
+class DatabaseManager {
+public:
+    void createRecord(const Record& newRecord) {
+        std::vector<Record> records = bufferPool.readPage(0);
+        records.push_back(newRecord);
+        bufferPool.writePage(0, records);
+    }
+
+    Record readRecord(int recordId) {
         std::vector<Record> records = bufferPool.readPage(0);
 
-        // Buscar el registro con el id dado y actualizarlo
-        auto it = std::find_if(records.begin(), records.end(), [record](const Record& r) {
-            return r.id == record.id;
+        auto it = std::find_if(records.begin(), records.end(), [recordId](const Record& record) {
+            return record.id == recordId;
         });
 
         if (it != records.end()) {
-            *it = record;
-            // Escribir la página actualizada en el buffer pool
+            return *it;
+        } else {
+            return Record{-1, "", -1};
+        }
+    }
+
+    void updateRecord(const Record& updatedRecord) {
+        std::vector<Record> records = bufferPool.readPage(0);
+
+        auto it = std::find_if(records.begin(), records.end(), [updatedRecord](const Record& record) {
+            return record.id == updatedRecord.id;
+        });
+
+        if (it != records.end()) {
+            *it = updatedRecord;
             bufferPool.writePage(0, records);
         }
     }
 
-    void deleteRecord(int id) {
-        // Leer la primera página desde el buffer pool
+    void deleteRecord(int recordId) {
         std::vector<Record> records = bufferPool.readPage(0);
-
-        // Eliminar el registro con el id dado
-        records.erase(std::remove_if(records.begin(), records.end(), [id](const Record& record) {
-            return record.id == id;
+        records.erase(std::remove_if(records.begin(), records.end(), [recordId](const Record& record) {
+            return record.id == recordId;
         }), records.end());
-
-        // Escribir la página actualizada en el buffer pool
         bufferPool.writePage(0, records);
     }
+
+    void saveToFile() {
+        std::vector<Record> records = bufferPool.readPage(0);
+
+        std::ofstream file("database.bin", std::ios::binary | std::ios::out | std::ios::trunc);
+        for (const auto& record : records) {
+            file.write(reinterpret_cast<const char*>(&record), sizeof(Record));
+        }
+        file.close();
+    }
+
+private:
+    BufferPool bufferPool;
 };
 
 int main() {
-    // Crear una instancia de la base de datos
-    Database database;
+    // Leer los registros desde el archivo binario existente o crear uno nuevo
+    std::vector<Record> initialRecords;
+    std::ifstream file("database.bin", std::ios::binary | std::ios::in);
+    if (file) {
+        Record record;
+        while (file.read(reinterpret_cast<char*>(&record), sizeof(Record))) {
+            initialRecords.push_back(record);
+        }
+        file.close();
+    } else {
+        std::ofstream newFile("database.bin", std::ios::binary | std::ios::out);
+        newFile.close();
+    }
 
-    // Crear registros
-    Record record1 { 1, "Robert", 23 };
-    Record record2 { 2, "James", 52 };
+    // Crear el gestor de la base de datos
+    DatabaseManager database;
 
-    // Insertar registros
-    database.createRecord(record1);
-    database.createRecord(record2);
+    // Cargar los registros iniciales al buffer pool
+    if (!initialRecords.empty()) {
+        database.createRecord(initialRecords[0]);
+    }
 
-    // Leer registros
-    Record retrievedRecord1 = database.readRecord(1);
-    Record retrievedRecord2 = database.readRecord(2);
-    std::cout << "Registros obtenidos:" << std::endl;
-    std::cout << "ID: " << retrievedRecord1.id << ", Nombre: " << retrievedRecord1.name << ", Edad: " << retrievedRecord1.age << std::endl;
-    std::cout << "ID: " << retrievedRecord2.id << ", Nombre: " << retrievedRecord2.name << ", Edad: " << retrievedRecord2.age << std::endl;
+    // Crear un nuevo registro
+    Record newRecord{1, "John", 25};
 
-    // Actualizar un registro
-    retrievedRecord1.age = 36;
-    database.updateRecord(retrievedRecord1);
-    
-    // Eliminar un registro
-    database.deleteRecord(2);
+    // Agregar el registro a la base de datos
+    database.createRecord(newRecord);
+
+    // Leer el registro recién agregado
+    Record retrievedRecord = database.readRecord(1);
+    std::cout << "Retrieved Record: ID=" << retrievedRecord.id << ", Name=" << retrievedRecord.name << ", Age=" << retrievedRecord.age << std::endl;
+
+    // Actualizar el registro
+    retrievedRecord.name = "Jane";
+    database.updateRecord(retrievedRecord);
+    retrievedRecord = database.readRecord(1);
+    std::cout << "Updated Record: ID=" << retrievedRecord.id << ", Name=" << retrievedRecord.name << ", Age=" << retrievedRecord.age << std::endl;
+
+    // Eliminar el registro
+    database.deleteRecord(1);
 
     // Guardar los cambios en el archivo binario
-    database.bufferPool.flushBufferPool();
+    database.saveToFile();
 
     return 0;
 }
